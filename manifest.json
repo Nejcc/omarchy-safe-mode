@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "nejcc.safe-mode",
+  "name": "Safe mode",
+  "version": "0.1.0",
+  "author": "Nejcc",
+  "license": "MIT",
+  "description": "Spots a shell crash loop, disables the third-party plugin behind it and tells you how to turn it back on",
+  "kinds": ["service"],
+  "keepLoaded": true,
+  "entryPoints": { "service": "Service.qml" }
+}

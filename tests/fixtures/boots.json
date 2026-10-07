@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "rounds": 0,
+  "boots": [
+    { "key": "kb-old:3000:100", "kernelBoot": "kb-old", "pid": 3000, "uptime": 50000, "started": 1791000000, "healthy": false, "handled": false },
+    { "key": "kb1:4100:500", "kernelBoot": "kb1", "pid": 4100, "uptime": 20, "started": 1791300000, "healthy": true, "handled": false },
+    { "key": "kb1:4101:9000", "kernelBoot": "kb1", "pid": 4101, "uptime": 900, "started": 1791300880, "healthy": false, "handled": false },
+    { "key": "kb1:4102:9500", "kernelBoot": "kb1", "pid": 4102, "uptime": 905, "started": 1791300885, "healthy": false, "handled": false }
+  ]
+}

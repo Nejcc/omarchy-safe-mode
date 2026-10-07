@@ -1,0 +1,198 @@
+#!/bin/bash
+# Safe mode for the Omarchy shell.
+#
+# For you, from any terminal or TTY (works when the shell is dead):
+#   omarchy-safe-mode off       disable every third-party plugin (backs up shell.json first)
+#   omarchy-safe-mode restore   put the backed-up shell.json back
+#   omarchy-safe-mode status    recorded shell starts, safe-mode log, backup
+#
+# The rest (_facts, _journal, _save, _disable) is called by Service.qml.
+
+set -uo pipefail
+
+SELF_ID=nejcc.safe-mode
+STATE=${XDG_STATE_HOME:-$HOME/.local/state}/omarchy-safe-mode
+CONFIG=$HOME/.config/omarchy/shell.json
+PLUGINS=$HOME/.config/omarchy/plugins
+BACKUP=$STATE/shell.json.before-safe-mode
+
+die() {
+  echo "omarchy-safe-mode: $*" >&2
+  exit 1
+}
+need_jq() { command -v jq >/dev/null || die "jq is required"; }
+log() {
+  mkdir -p "$STATE" && printf '%s %s\n' "$(date -Is)" "$*" >>"$STATE/safe-mode.log"
+}
+
+# "dir<TAB>id<TAB>newest file mtime" for every third-party plugin, the same
+# directories the shell scans.
+plugin_rows() {
+  local sub id mtime
+  for sub in "$PLUGINS"/*/; do
+    [[ -f $sub/manifest.json ]] || continue
+    id=$(jq -r '.id // empty | strings' "$sub/manifest.json" 2>/dev/null) || continue
+    [[ -n $id ]] || continue
+    mtime=$(find "$sub" -path '*/.git' -prune -o -type f -printf '%T@\n' 2>/dev/null | sort -n | tail -n 1)
+    sub=${sub%/}
+    printf '%s\t%s\t%s\n' "${sub##*/}" "$id" "${mtime:-0}"
+  done
+}
+
+# Writes $1 to $2 through a temp file in the same directory, so a crash or
+# full disk never leaves a half-written file. Follows a symlinked shell.json
+# (dotfiles) and keeps the file's mode.
+atomic_write() {
+  local dest tmp
+  dest=$(realpath -m -- "$2") || return 1
+  tmp=$(mktemp "$dest.XXXXXX") || return 1
+  [[ -e $dest ]] && chmod --reference="$dest" "$tmp"
+  if printf '%s\n' "$1" >"$tmp" && mv -f "$tmp" "$dest"; then return 0; fi
+  rm -f "$tmp"
+  return 1
+}
+
+shell_up() { command -v omarchy-shell >/dev/null && OMARCHY_SHELL_IPC_TIMEOUT=1s omarchy-shell shell ping >/dev/null 2>&1; }
+
+# A running shell watches shell.json and applies the edit by itself. A shell
+# that gave up has to be started again.
+apply() {
+  if shell_up; then
+    echo "The running shell picks up the change."
+  elif command -v omarchy-restart-shell >/dev/null && omarchy-restart-shell; then
+    echo "Restarted the shell."
+  else
+    echo "Start the shell again with: omarchy-restart-shell (or log out and back in)."
+  fi
+}
+
+cmd_off() {
+  need_jq
+  [[ -f $CONFIG ]] || {
+    echo "No $CONFIG: the shell runs on its defaults, which have no third-party plugins."
+    return 0
+  }
+  jq -e . "$CONFIG" >/dev/null 2>&1 || die "$CONFIG is not valid JSON; fix or move it by hand"
+  local ids next
+  ids=$(plugin_rows | cut -f2 | grep -vxF "$SELF_ID" | jq -Rsc 'split("\n") | map(select(length > 0))')
+  next=$(jq --argjson ids "$ids" '
+    def off: (if type == "object" then .id else . end) as $id | ($ids | index($id)) != null;
+    (if (.bar | type) == "object" and ((.bar.id // null) as $b | $ids | index($b)) != null then .bar |= del(.id) else . end)
+    | (if (.bar.layout | type) == "object" then .bar.layout |= map_values(if type == "array" then map(select(off | not)) else . end) else . end)
+    | (if (.plugins | type) == "array" then .plugins |= map(select(off | not)) else . end)' "$CONFIG") || die "could not edit $CONFIG"
+  if [[ $next == "$(jq . "$CONFIG")" ]]; then
+    echo "No third-party plugins are enabled."
+    return 0
+  fi
+  mkdir -p "$STATE" || die "cannot create $STATE"
+  # Keep the oldest backup: running off twice must not overwrite the real
+  # pre-safe-mode config with an already stripped one.
+  if [[ -f $BACKUP ]]; then
+    echo "Keeping the existing backup $BACKUP"
+  else
+    cp -p "$CONFIG" "$BACKUP" || die "could not back up $CONFIG"
+    echo "Backed up shell.json to $BACKUP"
+  fi
+  atomic_write "$next" "$CONFIG" || die "could not write $CONFIG"
+  local disabled
+  disabled=$(jq -r --argjson ids "$ids" '[paths(strings) as $p | getpath($p) | select(. as $v | $ids | index($v))] | unique | join(", ")' "$BACKUP")
+  log "manual off: disabled ${disabled:-third-party plugins}"
+  echo "Disabled: ${disabled:-third-party plugins}"
+  echo "Undo with: omarchy-safe-mode restore"
+  apply
+}
+
+cmd_restore() {
+  [[ -f $BACKUP ]] || die "no backup at $BACKUP; nothing to restore"
+  if [[ -f $CONFIG ]]; then
+    cp -p "$CONFIG" "$STATE/shell.json.before-restore" || die "could not save the current shell.json"
+    echo "Saved the current shell.json to $STATE/shell.json.before-restore"
+  fi
+  mkdir -p "${CONFIG%/*}"
+  atomic_write "$(cat "$BACKUP")" "$CONFIG" || die "could not write $CONFIG"
+  rm -f "$BACKUP"
+  log "manual restore"
+  echo "Restored shell.json from before safe mode."
+  apply
+}
+
+cmd_status() {
+  echo "State: $STATE"
+  if [[ -f $STATE/boots.json ]] && command -v jq >/dev/null; then
+    jq -r '"Safe-mode rounds in this crash loop: \(.rounds // 0)",
+      (.boots[-5:][] | "  start pid \(.pid)  \(.started | todate)  \(if .healthy then "healthy" else "not healthy" end)\(if .handled then ", handled" else "" end)")' \
+      "$STATE/boots.json" 2>/dev/null || echo "  boots.json unreadable"
+  else
+    echo "  no recorded shell starts"
+  fi
+  [[ -f $STATE/safe-mode.log ]] && {
+    echo "Log:"
+    tail -n 10 "$STATE/safe-mode.log" | sed 's/^/  /'
+  }
+  if [[ -f $BACKUP ]]; then echo "Backup: $BACKUP (omarchy-safe-mode restore)"; else echo "Backup: none"; fi
+}
+
+# One JSON object with everything Service.qml needs at startup. $PPID is the
+# Quickshell process that ran us.
+cmd_facts() {
+  need_jq
+  local pid=$PPID ticks uptime
+  ticks=$(sed 's/^.*) //' "/proc/$pid/stat" 2>/dev/null | cut -d' ' -f20)
+  read -r uptime _ </proc/uptime
+  plugin_rows | jq -Rsc \
+    --arg bootId "$(cat /proc/sys/kernel/random/boot_id)" --argjson pid "$pid" \
+    --arg ticks "${ticks:-0}" --argjson uptime "$uptime" --argjson now "$(date +%s)" \
+    --rawfile state <(cat "$STATE/boots.json" 2>/dev/null) \
+    --rawfile config <(cat "$CONFIG" 2>/dev/null) '
+    { bootId: $bootId, pid: $pid, startTicks: $ticks, uptime: $uptime, now: $now,
+      state: $state, config: $config,
+      plugins: [split("\n")[] | select(length > 0) | split("\t") | { dir: .[0], id: .[1], mtime: (.[2] | tonumber? // 0) }] }'
+}
+
+# The crashed starts' own lines from this kernel boot. Matching by PID and -b
+# needs no wall clock.
+cmd_journal() {
+  (($# > 0)) || return 0
+  local args=() pid
+  for pid in "$@"; do
+    [[ $pid =~ ^[0-9]+$ ]] && args+=("_PID=$pid")
+  done
+  ((${#args[@]})) || return 0
+  journalctl -b -t omarchy-shell -o json --output-fields=MESSAGE,_PID --no-pager -n 20000 "${args[@]}" 2>/dev/null
+}
+
+cmd_save() {
+  [[ -n $1 ]] || return 1
+  mkdir -p "$STATE" && atomic_write "$1" "$STATE/boots.json"
+}
+
+# Disable through the shell's own API, which persists to shell.json. Prints
+# the ids that really got disabled.
+cmd_disable() {
+  local id result
+  for id in "$@"; do
+    [[ $id == "$SELF_ID" || $id == omarchy.* ]] && continue
+    result=$(omarchy-shell shell setPluginEnabled "$id" false 2>&1)
+    if [[ $result == ok ]]; then
+      log "safe mode disabled $id"
+      echo "$id"
+    else
+      log "safe mode could not disable $id: $result"
+    fi
+  done
+}
+
+case ${1:-} in
+off | disable-all) cmd_off ;;
+restore | on) cmd_restore ;;
+status) cmd_status ;;
+_facts) cmd_facts ;;
+_journal) shift && cmd_journal "$@" ;;
+_save) cmd_save "${2:-}" ;;
+_disable) shift && cmd_disable "$@" ;;
+_log) shift && log "$*" ;;
+*)
+  sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'
+  [[ ${1:-} == -h || ${1:-} == --help || -z ${1:-} ]] || exit 1
+  ;;
+esac
