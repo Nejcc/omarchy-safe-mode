@@ -264,8 +264,8 @@ function baseNotice(result, crashes, disabled) {
   if (!disabled.length)
     return { title: "Safe mode: shell crashed " + crashes + " times",
       body: "No enabled third-party plugin to blame, so nothing was disabled." }
-  var why = result.reason === "journal" ? "named in the crash errors" : "the most recently changed plugin; no error named one"
+  // Notifications show about three lines, so the re-enable command goes first.
+  var why = result.reason === "journal" ? "named in the crash errors" : "most recently changed; no error named a plugin"
   return { title: "Safe mode disabled " + list,
-    body: "The shell crashed " + crashes + " times in a row. Disabled " + list + " (" + why + ").\n"
-      + "Re-enable with:\n" + enable }
+    body: enable + "\nShell crashed " + crashes + " times in a row; " + why + "." }
 }

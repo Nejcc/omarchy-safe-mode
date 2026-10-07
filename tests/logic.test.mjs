@@ -129,7 +129,7 @@ test("never first-party, never itself, never a disabled plugin", () => {
   // Newest enabled third-party plugin, skipping safe mode (5000) and the disabled one (9000).
   assert.deepEqual(plain(r.ids), ["innocent"])
   const n = L.notice(r, 2, ["innocent"])
-  assert.match(n.body, /Disabled innocent[\s\S]*omarchy plugin disable nejcc\.safe-mode/)
+  assert.match(n.body, /^omarchy plugin enable innocent\n[\s\S]*omarchy plugin disable nejcc\.safe-mode/)
 })
 
 test("nothing to blame when no third-party plugin is enabled", () => {
