@@ -2,6 +2,8 @@
 
 Spots an Omarchy shell crash loop, disables the third-party plugin behind it, and tells you which one and how to turn it back on.
 
+![Preview](preview.png)
+
 ## The problem
 
 Every plugin runs inside the one `omarchy-shell` process. One bad install or update can take the whole desktop down: no bar, no menu, no lock screen, the shell relaunching over and over. Getting out means finding the culprit and editing `~/.config/omarchy/shell.json` by hand.
