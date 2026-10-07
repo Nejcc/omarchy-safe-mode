@@ -20,6 +20,14 @@ Put the escape hatch on your PATH for the day the shell doesn't come back at all
 ln -s ~/.config/omarchy/plugins/nejcc.safe-mode/bin/omarchy-safe-mode ~/.local/bin/
 ```
 
+## Uninstall
+
+```sh
+omarchy plugin remove nejcc.safe-mode
+```
+
+State lives in `~/.local/state/omarchy-safe-mode/`; delete it if you like. If you ever ran `omarchy-safe-mode off`, run `omarchy-safe-mode restore` first, or keep `~/.config/omarchy/shell.json.before-safe-mode` until you no longer need it.
+
 ## Usage
 
 Nothing to do. When the shell crashes twice in a row and comes back a third time, you get a notification like:
